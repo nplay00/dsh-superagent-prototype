@@ -68,6 +68,37 @@ Both presets run with `danger-full-access` as the operator's OS user and read me
 
    Both configurations share the keychain entry for the app secret. To remove only the bot configuration, delete its directory; do not run `lark-cli config remove`, which would affect the shared secret.
 
+### DingTalk dedicated account (optional)
+
+The DingTalk Source acts as a real member account, not an application bot. It uses [DingTalk Workspace CLI](https://github.com/DingTalk-Real-AI/dingtalk-workspace-cli) (`dws`), whose sign-in, token refresh and device storage stay outside dsh-superagent: this repository never sees a token or app secret.
+
+> This route reads the approved groups the account can see and sends as that person. It is not suitable for a shared or unattributed bot identity. Get the administrator's authorization, a privacy review and a named owner before enabling it. Only list approved `openConversationId`s; leave other groups off and direct messages off unless a separate review covers them.
+
+1. Install and sign in on the host, as the dedicated account, not the operator's daily profile:
+
+   ```sh
+   npm install -g dingtalk-workspace-cli
+   dws auth login
+   dws auth status --format json
+   ```
+
+   `auth status` must report `"authenticated": true`. Keep the account name, owner and backup owner, and the recovery steps (device change, password reset, disablement) with the deployment record.
+
+2. Confirm the account can see one accepted test group and read its messages (`dws chat +chat-messages --group <openConversationId> --format json`), then note that group's `openConversationId`.
+
+3. Enable the plugin in the profile's `cordis.patch.yml` and restart:
+
+   ```yaml
+   - id: dsh-superagent-dingtalk-user
+     disabled: false
+   ```
+
+4. In **Settings → Sources → DingTalk (dedicated account)**, set the `dws` command (an absolute path is safest), the groups with their receive mode, and whether direct messages are received. Leave **other groups** off. Open **Policy → On each Source** and add the allowed members' `openDingtalkId`s; the admission table decides whether an unaddressed message in an all-message group may become a candidate.
+
+The Source reports `dingtalk-user` health: `error` when `dws` is missing, signed out, cannot report the account `openDingtalkId`, or every listener keeps exiting. Set **The account openDingtalkId** only when `dws auth status` does not print it; the account's own messages are dropped with it, which prevents the agent from answering itself. A listener that exits is restarted after the configured reconnect interval.
+
+This Source reads a message's text and its quoted message as Trigger context and does not implement a paged Thread reader; assessments therefore see the message, its quote and the recorded Thread, not older group history. Account changes, re-login and reconnection follow `dws`; dsh-superagent stores no credential.
+
 ## Install
 
 Run this block once, on a machine that has no `superagent` profile yet:
@@ -88,7 +119,7 @@ Run the profile-creation command only for a new installation. If the profile alr
 
 ## Machine configuration
 
-Copy [examples/profile.cordis.patch.yml](../examples/profile.cordis.patch.yml) to `~/.dsh/profiles/superagent/cordis.patch.yml`, replacing that file, and replace every `<placeholder>`. For Feishu, also enable the `dsh-superagent-feishu` entry there. The `webserver` entry sets the panel's port.
+Copy [examples/profile.cordis.patch.yml](../examples/profile.cordis.patch.yml) to `~/.dsh/profiles/superagent/cordis.patch.yml`, replacing that file, and replace every `<placeholder>`. For Feishu, also enable the `dsh-superagent-feishu` entry there; for DingTalk, enable `dsh-superagent-dingtalk-user` after signing in `dws` as described above. The `webserver` entry sets the panel's port.
 
 | Key | Required | Meaning |
 | --- | --- | --- |
