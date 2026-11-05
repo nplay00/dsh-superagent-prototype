@@ -55,4 +55,6 @@ export const KV = {
   feishu: { chats: record<Record<string, boolean>>('feishu-chats'), history: family<string, [chat: string]>('feishu-history:'),
     topics: family<Record<string, string>, [chat: string]>('feishu-history-threads:'),
     seen: family<string[], [thread: string]>('thread-seen:'), initialized: family<boolean, [thread: string]>('thread-initialized:') },
+  /** DingTalk user-identity Source: the time of the last message taken in, for the Source page. */
+  dingtalkUser: { lastEvent: record<string>('dingtalk-user-last-event') },
 }
