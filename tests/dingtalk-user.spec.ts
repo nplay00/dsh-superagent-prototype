@@ -10,7 +10,7 @@ import type { SourceContext } from '../src/sources/host.ts'
 import { DingTalkUserConfigSchema, dingtalkUserAccount, dingtalkUserKind, findOpenDingtalkId, ingestLine, listenArgs,
   subscriptionId, subscriptionsOf, watch, type DingTalkUserConfig, type DingTalkUserSubscription } from '../src/sources/dingtalk-user.ts'
 import { sendDingTalkUser } from '../src/sources/dingtalk-user-channel.ts'
-import { dingtalkUserChannel, dingtalkUserEventLine, dingtalkUserTime, dingtalkUserTrigger, dingtalkUserTriggerId, isMessageEvent }
+import { dingtalkUserChannel, dingtalkUserEventLine, dingtalkUserText, dingtalkUserTime, dingtalkUserTrigger, dingtalkUserTriggerId, isMessageEvent }
   from '../src/sources/dingtalk-user-trigger.ts'
 
 const TIME = '1762348800000'
@@ -60,6 +60,15 @@ describe('dingtalk-user trigger', () => {
     expect(dingtalkUserTime(1762348800)).toBe(new Date(1762348800000).toISOString())
     expect(() => dingtalkUserTime('not a time')).toThrow('Unreadable')
   })
+  it('reads plain, JSON-object and rich-text message bodies, and a quoted message sent as a JSON string', () => {
+    expect(dingtalkUserText('hello')).toBe('hello')
+    expect(dingtalkUserText('{"content":"hello"}')).toBe('hello')
+    expect(dingtalkUserText('[{"text":"a"},{"text":"b"}]')).toBe('ab')
+    expect(dingtalkUserText('{not json')).toBe('{not json')
+    const trigger = dingtalkUserTrigger(event({ quoted_message: JSON.stringify({ message_id: 'msg_0', sender: 'Bob', content: 'old' }) }), 'mention', { cli: 'dws', profile: '' })!
+    expect(trigger.meta.quoteId).toBe('msg_0')
+    expect(trigger.text).toBe('please fix the margin\n\n> old')
+  })
   it('unwraps the DWS transport envelope and recognizes only message events', () => {
     const inner = event()
     expect(dingtalkUserEventLine(JSON.stringify({ type: 'message', data: JSON.stringify(inner) }))).toMatchObject({ message_id: 'msg_1' })
@@ -101,6 +110,13 @@ describe('dingtalk-user subscriptions and scope', () => {
 })
 
 describe('dingtalk-user intake', () => {
+  it('retries a failed store instead of losing the message', async () => {
+    const h = host()
+    h.receive.mockRejectedValueOnce(new Error('database busy')).mockResolvedValueOnce('stored')
+    const status = { live: new Set<string>(), errors: new Map<string, string>(), events: 0 }
+    expect(await ingestLine(h.ctx, JSON.stringify(event()), { kind: 'at-me' }, config(), status, new Set())).toBe('stored')
+    expect(h.receive).toHaveBeenCalledTimes(2)
+  })
   it('stores a message once and records its last event', async () => {
     const h = host()
     const status = { live: new Set<string>(), errors: new Map<string, string>(), events: 0 }

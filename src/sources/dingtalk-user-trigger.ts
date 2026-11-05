@@ -50,6 +50,19 @@ export function dingtalkUserTime(value: string | number | undefined): string {
   if (!Number.isFinite(time)) throw new Error(`Unreadable DingTalk message time: ${value}`)
   return new Date(time).toISOString()
 }
+/** Extracts readable text from the plain, JSON-object or rich-text array form DWS has printed for a message body. */
+export function dingtalkUserText(content: string): string {
+  const text = content.trim()
+  if (!text || !/^[[{]/.test(text)) return text
+  const flatten = (value: unknown): string => typeof value === 'string' ? value
+    : Array.isArray(value) ? value.map(flatten).join('')
+      : value && typeof value === 'object' ? flatten((value as { text?: unknown; content?: unknown }).text ?? (value as { content?: unknown }).content) : ''
+  try {
+    const value: unknown = JSON.parse(text)
+    const plain = typeof value === 'string' ? value : flatten(value)
+    return plain.trim() || text
+  } catch { return text /* Ordinary text that happens to begin with a bracket. */ }
+}
 /** Quotes a message body as a Markdown block; used only for context, never as a reply instruction. */
 const quotedText = (content: string | undefined): string => {
   const text = content?.trim()
@@ -60,14 +73,20 @@ const quotedText = (content: string | undefined): string => {
  * re-trigger it; an event without the three stable identities is unreadable and produces none either.
  */
 export function dingtalkUserTrigger(input: unknown, delivery: Delivery, account: { selfOpenDingtalkId?: string; cli: string; profile: string }): Trigger | undefined {
-  const parsed = DingTalkUserEventSchema.safeParse(input)
+  // A quoted message is documented as an object, but older output nested it as a JSON string.
+  let value = input
+  if (input && typeof input === 'object' && typeof (input as { quoted_message?: unknown }).quoted_message === 'string') {
+    try { value = { ...input as Record<string, unknown>, quoted_message: JSON.parse((input as { quoted_message: string }).quoted_message) } }
+    catch { /* Keep the original value; the event is unreadable if the quote is required. */ }
+  }
+  const parsed = DingTalkUserEventSchema.safeParse(value)
   if (!parsed.success) return undefined
   const event = parsed.data
   if (account.selfOpenDingtalkId && event.sender_open_dingtalk_id === account.selfOpenDingtalkId) return undefined
   const direct = delivery === 'direct'
   const quote = event.quoted_message ?? undefined
-  const body = event.content.trim()
-  const text = [body, quotedText(quote?.content)].filter(Boolean).join('\n\n')
+  const body = dingtalkUserText(event.content)
+  const text = [body, quotedText(quote?.content ? dingtalkUserText(quote.content) : undefined)].filter(Boolean).join('\n\n')
   return { id: dingtalkUserTriggerId(event.message_id), source: SOURCE,
     threads: [{ source: SOURCE, id: event.conversation_id }],
     actor: { source: SOURCE, id: event.sender_open_dingtalk_id }, human: true,
@@ -76,7 +95,7 @@ export function dingtalkUserTrigger(input: unknown, delivery: Delivery, account:
     channel: dingtalkUserChannel(event.conversation_id, event.message_id, event.sender_open_dingtalk_id, direct, account.cli, account.profile),
     meta: { conversationId: event.conversation_id, messageId: event.message_id, senderOpenDingtalkId: event.sender_open_dingtalk_id,
       direct, sender: event.sender ?? '', delivery,
-      ...(quote?.message_id ? { quoteId: quote.message_id, ...(quote.content ? { quoteText: quote.content.slice(0, 500) } : {}) } : {}),
+      ...(quote?.message_id ? { quoteId: quote.message_id, ...(quote.content ? { quoteText: dingtalkUserText(quote.content).slice(0, 500) } : {}) } : {}),
       ...(event.forward_messages?.length ? { forwardCount: event.forward_messages.length } : {}),
       ...(event.event_id ? { eventId: event.event_id } : {}) } }
 }

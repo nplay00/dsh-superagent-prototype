@@ -103,14 +103,20 @@ export async function ingestLine(ctx: SourceContext, line: string, subscription:
   if (!isMessageEvent(event)) return 'ignored'
   const identity = event as { message_id?: unknown; conversation_id?: unknown }
   if (typeof identity.message_id !== 'string' || typeof identity.conversation_id !== 'string') return 'ignored'
-  if (seen.has(identity.message_id)) return 'ignored'
+  const messageId = identity.message_id, conversationId = identity.conversation_id
+  if (seen.has(messageId)) return 'ignored'
   // An all-message subscription delivers this mention too; the at-me copy must not use up the Trigger ID first.
-  if (subscription.kind === 'at-me' && config.groups.some(group => group.conversationId === identity.conversation_id && group.listen === 'all')) return 'ignored'
-  seen.add(identity.message_id)
-  if (seen.size > 2000) seen.delete(seen.values().next().value!)
+  if (subscription.kind === 'at-me' && config.groups.some(group => group.conversationId === conversationId && group.listen === 'all')) return 'ignored'
+  const remember = (): void => { seen.add(messageId); if (seen.size > 2000) seen.delete(seen.values().next().value!) }
   const trigger = dingtalkUserTrigger(event, deliveryOf(subscription), { selfOpenDingtalkId: config.selfOpenDingtalkId, cli: config.cli, profile: config.profile })
-  if (!trigger) return 'ignored'
-  const result = await ctx.receive(trigger)
+  if (!trigger) { remember(); return 'ignored' }
+  // A failed store keeps the message out of the seen set and is retried, so a transient database error does not lose it.
+  let result: 'stored' | 'duplicate' | 'filtered' = 'stored'
+  for (let attempt = 0; ; attempt++) {
+    try { result = await ctx.receive(trigger); break }
+    catch (error) { if (attempt >= 2) throw error; await delay(500) }
+  }
+  remember()
   if (result === 'filtered' || result === 'duplicate') return result
   status.events += 1
   status.lastEventAt = new Date().toISOString()
@@ -140,6 +146,7 @@ async function supervise(ctx: SourceContext, config: DingTalkUserConfig, subscri
         child.kill('SIGTERM')
       }
       signal.addEventListener('abort', abort, { once: true })
+      if (signal.aborted) abort()
       const closed = new Promise<void>(resolve => {
         child.once('error', (error: unknown) => { status.errors.set(id, `${id}: ${error instanceof Error ? error.message : String(error)}`); resolve() })
         child.once('exit', (code, signalName) => {
